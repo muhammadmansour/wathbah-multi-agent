@@ -506,69 +506,55 @@ async def detect_agent_type(message: str, has_files: bool = False, file_types: l
     # No files attached - use message content only
     print(f"   📝 No files, analyzing message content...")
     
-    # Check for explicit email requests (multilingual patterns)
-    explicit_email_patterns = [
-        # English
-        "send mail", "send email", "email to", "send to", "mail to", "forward to", "share via email",
-        # Arabic
-        "البريد الإلكتروني", "إرسال", "بريد", "مشاركة",
-        # Spanish
-        "enviar correo", "enviar email", "correo electrónico",
-        # French
-        "envoyer mail", "envoyer email", "courrier électronique",
-        # German
-        "e-mail senden", "email versenden"
-    ]
+    # Always use LLM for dynamic primary agent detection
+    print(f"   🤖 Using LLM for dynamic primary agent detection...")
+    classifier_prompt = f"""
+    You are an intelligent agent classifier. Analyze the user's message to understand their PRIMARY intent and classify it into the most appropriate agent type.
     
-    # Check both lowercase and original text for multilingual support
-    email_detected = any(pattern in text for pattern in explicit_email_patterns) or \
-                    any(pattern in message for pattern in explicit_email_patterns)
+    User message: "{message}"
+    Context: {"User has uploaded files" if has_files else "No files uploaded"}
     
-    if email_detected:
-        print(f"   📧 Explicit email request detected")
-        return "mailer"
-    elif "summarize" in text or "summary" in text:
-        print(f"   📝 Summarization request detected")
-        return "summarizer"
-    elif "analyze" in text or "analysis" in text or "financial" in text:
-        print(f"   📊 Analysis request detected")
-        return "analyzer"
-    elif any(math_indicator in text for math_indicator in ["+", "-", "*", "/", "=", "calculate", "solve", "math", "equation", "formula", "sqrt", "square root", "power", "exponent"]):
-        print(f"   🔢 Mathematical query detected")
-        return "mathematical"
-    else:
-        print(f"   🤖 Using LLM classifier for general query...")
-        # Let LLM decide for general queries
-        classifier_prompt = f"""
-        You are a multilingual router. Classify the user's request into one of these agent types:
-        - mailer: for sending emails (البريد الإلكتروني, enviar correo, envoyer mail, e-mail senden)
-        - summarizer: for summarizing content (ملخص, resumen, résumé, zusammenfassung)
-        - analyzer: for analyzing documents (تحليل, análisis, analyse, analyse)
-        - mathematical: for math problems (حساب, matemáticas, mathématiques, mathematik)
-        - historian: for historical information (تاريخ, historia, histoire, geschichte)
-        - sports: for sports information (رياضة, deportes, sports, sport)
-        - general: for general questions and information requests
-
-    User query: "{message}"
-
-        Important: 
-        - The user may write in English, Arabic, Spanish, French, or German
-        - Only choose "mailer" if the user explicitly wants to send an email
-        - Choose "mathematical" for any math problems, calculations, or arithmetic
-        - If they're asking a question and mentioning email as a secondary action, choose "general"
-        - Look for keywords in any language that indicate the user's intent
-
-    Respond with only one word (the English agent type: mailer, summarizer, analyzer, mathematical, historian, sports, or general).
+    Available agent types:
+    - mailer: for sending emails, sharing results, notifying people, distributing information
+    - summarizer: for summarizing content, creating briefs, condensing information
+    - analyzer: for analyzing documents, examining files, reviewing content, financial analysis
+    - mathematical: for calculations, solving equations, computing values, math problems
+    - historian: for historical information, research about past events, historical figures
+    - sports: for sports information, statistics, game results, athlete data
+    - general: for general questions, conversations, and information requests
+    
+    Instructions:
+    1. Focus on the PRIMARY action the user wants to perform
+    2. Look beyond specific keywords - understand the core intent
+    3. Consider the context (files uploaded = likely analysis/summarization)
+    4. If the user wants to do multiple things, pick the MAIN/FIRST action
+    5. The user may write in any language (English, Arabic, Spanish, French, German, etc.)
+    6. Don't just match keywords - understand what they're trying to accomplish
+    
+    Examples:
+    - "Analyze this report and send to John" → PRIMARY: analyzer (analysis is the main task)
+    - "Send this document to the team" → PRIMARY: mailer (sending is the main task)
+    - "What's 2+2 and email the answer" → PRIMARY: mathematical (calculation is the main task)
+    - "البريد الإلكتروني" (just mentions email) → PRIMARY: mailer
+    - "تحليل التقرير المالي" (analyze financial report) → PRIMARY: analyzer
+    
+    Respond with only ONE word (the English agent type).
     """
-    result = await model.ainvoke(classifier_prompt)
-    agent_type = result.content.strip().lower()
-
-    # fallback safety
-    if agent_type not in ["general", "mailer", "summarizer", "analyzer", "mathematical", "historian", "sports"]:
-        agent_type = "general"
-
-    print(f"   🤖 LLM classified as: {agent_type}")
-    return agent_type
+    
+    try:
+        result = await model.ainvoke(classifier_prompt)
+        agent_type = result.content.strip().lower()
+        
+        # fallback safety
+        if agent_type not in ["general", "mailer", "summarizer", "analyzer", "mathematical", "historian", "sports"]:
+            agent_type = "general"
+        
+        print(f"   🤖 LLM classified primary agent as: {agent_type}")
+        return agent_type
+        
+    except Exception as e:
+        print(f"   ⚠️ LLM classification failed: {e}, defaulting to general")
+        return "general"
 
 async def analyze_context_for_additional_agents(message: str, primary_agent_type: str) -> list[str]:
     """
@@ -582,136 +568,62 @@ async def analyze_context_for_additional_agents(message: str, primary_agent_type
     additional_agents = []
     text = message.lower() if message else ""
     
-    # Define keywords for different agent types (multilingual support)
-    agent_keywords = {
-        "mailer": [
-            # English
-            "send mail", "send email", "email", "send to", "mail to", "forward to", "share via email", "notify", "distribute", "share with",
-            # Arabic
-            "البريد الإلكتروني", "إرسال", "بريد", "مشاركة", "إشعار", "توزيع",
-            # Spanish
-            "enviar correo", "email", "correo electrónico", "enviar a", "compartir por correo",
-            # French
-            "envoyer mail", "envoyer email", "courrier électronique", "partager par email",
-            # German
-            "e-mail senden", "email versenden", "per email teilen"
-        ],
-        "analyzer": [
-            # English
-            "analyze", "analysis", "examine", "review", "assess", "evaluate", "financial", "balance sheet", "income statement",
-            # Arabic
-            "تحليل", "فحص", "مراجعة", "تقييم", "مالي", "الميزانية العمومية",
-            # Spanish
-            "analizar", "análisis", "examinar", "revisar", "evaluar", "financiero",
-            # French
-            "analyser", "analyse", "examiner", "réviser", "évaluer", "financier",
-            # German
-            "analysieren", "analyse", "untersuchen", "überprüfen", "bewerten", "finanziell"
-        ],
-        "summarizer": [
-            # English
-            "summarize", "summary", "brief", "overview", "condensed", "digest",
-            # Arabic
-            "ملخص", "تلخيص", "موجز", "نظرة عامة",
-            # Spanish
-            "resumir", "resumen", "resumen ejecutivo", "sinopsis",
-            # French
-            "résumer", "résumé", "synthèse", "aperçu",
-            # German
-            "zusammenfassen", "zusammenfassung", "übersicht"
-        ],
-        "mathematical": [
-            # English
-            "calculate", "compute", "solve", "math", "equation", "formula", "+", "-", "*", "/", "=", "sqrt",
-            # Arabic
-            "حساب", "احسب", "رياضيات", "معادلة", "حل",
-            # Spanish
-            "calcular", "computar", "resolver", "matemáticas", "ecuación",
-            # French
-            "calculer", "résoudre", "mathématiques", "équation",
-            # German
-            "berechnen", "rechnen", "lösen", "mathematik", "gleichung"
-        ],
-        "historian": [
-            # English
-            "history", "historical", "past", "ancient", "medieval", "renaissance", "war", "empire", "civilization",
-            # Arabic
-            "تاريخ", "تاريخي", "الماضي", "قديم", "حرب", "إمبراطورية", "حضارة",
-            # Spanish
-            "historia", "histórico", "pasado", "antiguo", "guerra", "imperio", "civilización",
-            # French
-            "histoire", "historique", "passé", "ancien", "guerre", "empire", "civilisation",
-            # German
-            "geschichte", "historisch", "vergangenheit", "antik", "krieg", "reich", "zivilisation"
-        ],
-        "sports": [
-            # English
-            "sports", "athlete", "team", "game", "match", "score", "championship", "league", "player", "football", "basketball", "soccer",
-            # Arabic
-            "رياضة", "رياضي", "فريق", "لعبة", "مباراة", "نتيجة", "بطولة", "دوري", "لاعب", "كرة القدم", "كرة السلة",
-            # Spanish
-            "deportes", "atleta", "equipo", "juego", "partido", "puntuación", "campeonato", "liga", "jugador", "fútbol", "baloncesto",
-            # French
-            "sports", "athlète", "équipe", "jeu", "match", "score", "championnat", "ligue", "joueur", "football", "basketball",
-            # German
-            "sport", "athlet", "mannschaft", "spiel", "match", "punktzahl", "meisterschaft", "liga", "spieler", "fußball", "basketball"
-        ]
-    }
+    # No static keywords - using dynamic LLM analysis for all agent detection
     
-    # Check for each agent type (except the primary one)
-    for agent_type, keywords in agent_keywords.items():
-        if agent_type != primary_agent_type:
-            # Check both original text and lowercase for multilingual support
-            matched_keywords = []
-            for keyword in keywords:
-                if keyword.lower() in text or keyword in message:  # Check both cases for non-English text
-                    matched_keywords.append(keyword)
-            
-            if matched_keywords:
-                print(f"   🎯 Found keywords for {agent_type}: {matched_keywords}")
-                additional_agents.append(agent_type)
+    # Skip keyword matching - rely entirely on LLM analysis for dynamic detection
     
-    # Use LLM for more sophisticated context analysis if needed
-    if not additional_agents and message:
-        print(f"   🤖 Using LLM for advanced context analysis...")
-        context_prompt = f"""
-        Analyze this user message to identify if they need multiple types of assistance.
+    # Always use LLM for dynamic content analysis
+    print(f"   🤖 Using LLM for dynamic content analysis...")
+    context_prompt = f"""
+    Analyze this user message to understand what they want to accomplish. Look for implicit and explicit requests for different types of assistance.
+    
+    Primary agent type: {primary_agent_type}
+    User message: "{message}"
+    
+    Available agent types:
+    - mailer: for sending emails, sharing results, notifying people, distributing information
+    - analyzer: for document analysis, examining files, reviewing content
+    - summarizer: for document summarization, creating briefs, condensing information
+    - mathematical: for calculations, solving equations, computing values
+    - historian: for historical information, research about past events
+    - sports: for sports information, statistics, game results
+    - general: for general questions and information requests
+    
+    Instructions:
+    1. Look beyond specific keywords - understand the user's intent and workflow
+    2. Consider what the user might want to do with results (share, send, distribute, notify)
+    3. Identify any secondary actions or follow-up tasks mentioned or implied
+    4. Consider the natural flow of tasks (analyze → email results, calculate → share findings)
+    5. The user may express email intent in various ways without using the word "email"
+    
+    Examples of email intent detection:
+    - "send this to John" → mailer needed
+    - "share with the team" → mailer needed  
+    - "let Sarah know about this" → mailer needed
+    - "distribute the findings" → mailer needed
+    - "notify the manager" → mailer needed
+    - "forward to the client" → mailer needed
+    - Any mention of recipients, sharing, or communication → mailer needed
+    
+    Return ONLY the additional agent types needed (comma-separated), or "none" if no additional agents are needed.
+    Do not include the primary agent type in your response.
+    Focus on understanding intent, not just matching keywords.
+    """
+    
+    try:
+        result = await model.ainvoke(context_prompt)
+        response = result.content.strip().lower()
         
-        Primary agent type: {primary_agent_type}
-        User message: "{message}"
-        
-        Available agent types:
-        - mailer: for sending emails
-        - analyzer: for document analysis
-        - summarizer: for document summarization  
-        - mathematical: for calculations
-        - historian: for historical information
-        - sports: for sports information
-        - general: for general questions
-        
-        Look for secondary tasks or actions mentioned in the message that would require different agent types.
-        For example:
-        - "Analyze this financial report and send it to John" → primary: analyzer, additional: mailer
-        - "Calculate the ROI and email the results" → primary: mathematical, additional: mailer
-        - "Summarize this document and share with the team" → primary: summarizer, additional: mailer
-        
-        Return ONLY the additional agent types needed (comma-separated), or "none" if no additional agents are needed.
-        Do not include the primary agent type in your response.
-        """
-        
-        try:
-            result = await model.ainvoke(context_prompt)
-            response = result.content.strip().lower()
-            
-            if response != "none" and response:
-                # Parse comma-separated agent types
-                detected_agents = [agent.strip() for agent in response.split(",") if agent.strip()]
-                # Validate agent types
-                valid_agents = [agent for agent in detected_agents if agent in agent_keywords.keys()]
-                additional_agents.extend(valid_agents)
-                print(f"   🤖 LLM detected additional agents: {valid_agents}")
-        except Exception as e:
-            print(f"   ⚠️ LLM context analysis failed: {e}")
+        if response != "none" and response:
+            # Parse comma-separated agent types
+            detected_agents = [agent.strip() for agent in response.split(",") if agent.strip()]
+            # Validate agent types
+            valid_agent_types = ["mailer", "analyzer", "summarizer", "mathematical", "historian", "sports", "general"]
+            valid_agents = [agent for agent in detected_agents if agent in valid_agent_types]
+            additional_agents.extend(valid_agents)
+            print(f"   🤖 LLM detected additional agents: {valid_agents}")
+    except Exception as e:
+        print(f"   ⚠️ LLM context analysis failed: {e}")
     
     # Remove duplicates while preserving order
     unique_additional_agents = []
@@ -756,7 +668,7 @@ def create_dynamic_agent(agent_type: str):
 
     # Create specific prompts for each agent type
     prompts = {
-        "mailer": "You are an email assistant. You can send emails to recipients with optional file attachments. Use send_email for basic emails or send_email_with_pdf for emails with PDF attachments. When a PDF file path is provided, use send_email_with_pdf to actually attach the file to the email. If the user mentions an email address but no specific subject or body, create appropriate content based on the context. Always ask for clarification if you need more information to send a complete email.",
+        "mailer": "You are a multilingual email assistant. You can send emails to recipients with optional file attachments. IMPORTANT: You HAVE email sending capabilities through your tools. Use send_email for basic emails or send_email_with_pdf for emails with PDF attachments. When a PDF file path is provided, use send_email_with_pdf to actually attach the file to the email. If the user mentions an email address but no specific subject or body, create appropriate content based on the context. You can respond in the user's language (Arabic, English, Spanish, French, German) but always use your email tools to actually send emails. Do not say you cannot send emails - you can and should use your tools.",
         "summarizer": "You are a document summarization expert. You can analyze and summarize documents, especially PDFs. When you receive file attachments, extract and analyze their content to provide comprehensive summaries.",
         "analyzer": "You are a document analysis expert. FIRST, always use the detect_document_type tool to identify what type of document you're analyzing. Based on the document type detected, provide appropriate analysis: financial analysis for financial documents, content analysis for product descriptions, legal analysis for contracts, etc. You can also generate PDF reports of your analysis using the generate_analysis_pdf tool. IMPORTANT: Never assume document type - always detect it first, then provide analysis appropriate to that document type.",
         "mathematical": "You are a mathematical assistant. You can solve arithmetic problems, algebraic equations, and perform various mathematical calculations. Use the calculate_math tool to compute mathematical expressions. Always show your work and explain the steps when solving complex problems.",
@@ -815,9 +727,31 @@ async def run_multi_agent_workflow(message: str, files: list = None, agent_type:
     # Step 2: Analyze context for additional agents needed
     additional_agent_types = await analyze_context_for_additional_agents(message, primary_agent_type)
     
-    # Step 3: Create execution plan
+    # Step 3: Create execution plan (ensure all agent types are in English)
+    def normalize_agent_type(agent_name):
+        """Normalize agent names to English regardless of input language"""
+        # Map any non-English agent names to English equivalents
+        if agent_name in ["البريد الإلكتروني", "البريد وإرسال التقارير", "correo", "mail", "e-mail"]:
+            return "mailer"
+        elif agent_name in ["تحليل", "análisis", "analyse"]:
+            return "analyzer"
+        elif agent_name in ["ملخص", "resumen", "résumé", "zusammenfassung"]:
+            return "summarizer"
+        elif agent_name in ["حساب", "matemáticas", "mathématiques", "mathematik"]:
+            return "mathematical"
+        elif agent_name in ["تاريخ", "historia", "histoire", "geschichte"]:
+            return "historian"
+        elif agent_name in ["رياضة", "deportes", "sport"]:
+            return "sports"
+        else:
+            return agent_name  # Already in English or unknown
+    
+    # Normalize all agent types to English
+    primary_agent_type = normalize_agent_type(primary_agent_type)
+    additional_agent_types = [normalize_agent_type(agent) for agent in additional_agent_types]
+    
     agent_chain = [primary_agent_type] + additional_agent_types
-    print(f"   📋 Agent execution chain: {agent_chain}")
+    print(f"   📋 Agent execution chain (normalized): {agent_chain}")
     
     # Step 4: Execute agents in sequence
     workflow_results = {}
@@ -850,22 +784,46 @@ async def run_multi_agent_workflow(message: str, files: list = None, agent_type:
                     previous_results.append(f"{prev_agent.title()} Results:\n{prev_result}")
             
             if previous_results:
-                agent_context = f"""
-                Please send an email with the following results from previous analysis.
+                # Detect if original message was in Arabic to provide appropriate context
+                is_arabic = any(char in message for char in ['البريد', 'إرسال', 'تقرير', 'ملخص', 'تحليل'])
                 
-                Original user request: "{message}"
-                
-                {chr(10).join(previous_results)}
-                
-                PDF Report: {context_data.get('pdf_path', 'No PDF generated')}
-                
-                If the user mentioned specific recipients, email addresses, or teams, use that information.
-                If no specific recipient was mentioned, ask for clarification or use a default recipient.
-                
-                Include the analysis results in the email body and attach any PDF reports if available.
-                
-                IMPORTANT: Use the appropriate email tool (send_email or send_email_with_pdf) based on whether PDF is available.
-                """
+                if is_arabic:
+                    agent_context = f"""
+                    أنت مساعد بريد إلكتروني متعدد اللغات. يمكنك إرسال رسائل البريد الإلكتروني مع المرفقات.
+                    
+                    طلب المستخدم الأصلي: "{message}"
+                    
+                    النتائج من التحليل السابق:
+                    {chr(10).join(previous_results)}
+                    
+                    تقرير PDF: {context_data.get('pdf_path', 'لم يتم إنشاء PDF')}
+                    
+                    مهم جداً: 
+                    - يجب عليك استخدام أدوات البريد الإلكتروني المتاحة لديك لإرسال البريد فعلياً
+                    - استخدم send_email للرسائل العادية أو send_email_with_pdf للرسائل مع مرفقات PDF
+                    - إذا ذكر المستخدم عنوان بريد إلكتروني محدد، استخدمه
+                    - إذا لم يذكر عنواناً، اطلب التوضيح
+                    - لا تقل أنك لا تستطيع إرسال البريد - أنت تستطيع ويجب أن تستخدم الأدوات المتاحة
+                    
+                    اكتب البريد الإلكتروني وأرسله باستخدام الأدوات المتاحة.
+                    """
+                else:
+                    agent_context = f"""
+                    Please send an email with the following results from previous analysis.
+                    
+                    Original user request: "{message}"
+                    
+                    {chr(10).join(previous_results)}
+                    
+                    PDF Report: {context_data.get('pdf_path', 'No PDF generated')}
+                    
+                    If the user mentioned specific recipients, email addresses, or teams, use that information.
+                    If no specific recipient was mentioned, ask for clarification or use a default recipient.
+                    
+                    Include the analysis results in the email body and attach any PDF reports if available.
+                    
+                    IMPORTANT: Use the appropriate email tool (send_email or send_email_with_pdf) based on whether PDF is available.
+                    """
         elif current_agent_type == "summarizer" and context_data.get("analysis_result"):
             # If summarizer comes after analyzer, summarize the analysis
             agent_context += f"\n\nPrevious analysis results to summarize:\n{context_data.get('analysis_result')}"
