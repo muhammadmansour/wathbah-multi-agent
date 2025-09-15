@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+"""
+Multi-Agent FastAPI System
+Generates agents based on both explicit agent_type and message context.
+"""
 from fastapi import FastAPI
 from pydantic import BaseModel
 import smtplib
@@ -908,3 +913,12 @@ async def multi_agent_endpoint(
     print(f"   Total agents executed: {len(result.get('agents_executed', []))}")
     
     return result
+
+if __name__ == "__main__":
+    import uvicorn
+    print("🚀 Starting Multi-Agent FastAPI Server...")
+    print("📋 Available endpoints:")
+    print("   • POST /ask - General agent endpoint")
+    print("   • POST /multi-agent - Explicit multi-agent endpoint")
+    print("   • GET /docs - API documentation")
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
