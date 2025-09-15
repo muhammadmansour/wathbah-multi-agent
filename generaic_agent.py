@@ -506,13 +506,25 @@ async def detect_agent_type(message: str, has_files: bool = False, file_types: l
     # No files attached - use message content only
     print(f"   📝 No files, analyzing message content...")
     
-    # Check for explicit email requests (more specific patterns)
+    # Check for explicit email requests (multilingual patterns)
     explicit_email_patterns = [
-        "send mail", "send email", "email to", "send to", 
-        "mail to", "forward to", "share via email"
+        # English
+        "send mail", "send email", "email to", "send to", "mail to", "forward to", "share via email",
+        # Arabic
+        "البريد الإلكتروني", "إرسال", "بريد", "مشاركة",
+        # Spanish
+        "enviar correo", "enviar email", "correo electrónico",
+        # French
+        "envoyer mail", "envoyer email", "courrier électronique",
+        # German
+        "e-mail senden", "email versenden"
     ]
     
-    if any(pattern in text for pattern in explicit_email_patterns):
+    # Check both lowercase and original text for multilingual support
+    email_detected = any(pattern in text for pattern in explicit_email_patterns) or \
+                    any(pattern in message for pattern in explicit_email_patterns)
+    
+    if email_detected:
         print(f"   📧 Explicit email request detected")
         return "mailer"
     elif "summarize" in text or "summary" in text:
@@ -528,27 +540,31 @@ async def detect_agent_type(message: str, has_files: bool = False, file_types: l
         print(f"   🤖 Using LLM classifier for general query...")
         # Let LLM decide for general queries
         classifier_prompt = f"""
-        You are a router. Classify the user's request into one of these agent types:
-        - mailer: for sending emails (only if user explicitly wants to send an email)
-        - summarizer: for summarizing content
-        - analyzer: for analyzing documents, especially financial statements
-        - mathematical: for math problems, calculations, equations, and arithmetic
+        You are a multilingual router. Classify the user's request into one of these agent types:
+        - mailer: for sending emails (البريد الإلكتروني, enviar correo, envoyer mail, e-mail senden)
+        - summarizer: for summarizing content (ملخص, resumen, résumé, zusammenfassung)
+        - analyzer: for analyzing documents (تحليل, análisis, analyse, analyse)
+        - mathematical: for math problems (حساب, matemáticas, mathématiques, mathematik)
+        - historian: for historical information (تاريخ, historia, histoire, geschichte)
+        - sports: for sports information (رياضة, deportes, sports, sport)
         - general: for general questions and information requests
 
     User query: "{message}"
 
         Important: 
+        - The user may write in English, Arabic, Spanish, French, or German
         - Only choose "mailer" if the user explicitly wants to send an email
         - Choose "mathematical" for any math problems, calculations, or arithmetic
         - If they're asking a question and mentioning email as a secondary action, choose "general"
+        - Look for keywords in any language that indicate the user's intent
 
-    Respond with only one word (the agent type).
+    Respond with only one word (the English agent type: mailer, summarizer, analyzer, mathematical, historian, sports, or general).
     """
     result = await model.ainvoke(classifier_prompt)
     agent_type = result.content.strip().lower()
 
     # fallback safety
-    if agent_type not in ["general", "mailer", "summarizer", "analyzer", "mathematical"]:
+    if agent_type not in ["general", "mailer", "summarizer", "analyzer", "mathematical", "historian", "sports"]:
         agent_type = "general"
 
     print(f"   🤖 LLM classified as: {agent_type}")
@@ -566,21 +582,93 @@ async def analyze_context_for_additional_agents(message: str, primary_agent_type
     additional_agents = []
     text = message.lower() if message else ""
     
-    # Define keywords for different agent types
+    # Define keywords for different agent types (multilingual support)
     agent_keywords = {
-        "mailer": ["send mail", "send email", "email", "send to", "mail to", "forward to", "share via email", "notify", "distribute", "share with"],
-        "analyzer": ["analyze", "analysis", "examine", "review", "assess", "evaluate", "financial", "balance sheet", "income statement"],
-        "summarizer": ["summarize", "summary", "brief", "overview", "condensed", "digest"],
-        "mathematical": ["calculate", "compute", "solve", "math", "equation", "formula", "+", "-", "*", "/", "=", "sqrt"],
-        "historian": ["history", "historical", "past", "ancient", "medieval", "renaissance", "war", "empire", "civilization"],
-        "sports": ["sports", "athlete", "team", "game", "match", "score", "championship", "league", "player", "football", "basketball", "soccer"]
+        "mailer": [
+            # English
+            "send mail", "send email", "email", "send to", "mail to", "forward to", "share via email", "notify", "distribute", "share with",
+            # Arabic
+            "البريد الإلكتروني", "إرسال", "بريد", "مشاركة", "إشعار", "توزيع",
+            # Spanish
+            "enviar correo", "email", "correo electrónico", "enviar a", "compartir por correo",
+            # French
+            "envoyer mail", "envoyer email", "courrier électronique", "partager par email",
+            # German
+            "e-mail senden", "email versenden", "per email teilen"
+        ],
+        "analyzer": [
+            # English
+            "analyze", "analysis", "examine", "review", "assess", "evaluate", "financial", "balance sheet", "income statement",
+            # Arabic
+            "تحليل", "فحص", "مراجعة", "تقييم", "مالي", "الميزانية العمومية",
+            # Spanish
+            "analizar", "análisis", "examinar", "revisar", "evaluar", "financiero",
+            # French
+            "analyser", "analyse", "examiner", "réviser", "évaluer", "financier",
+            # German
+            "analysieren", "analyse", "untersuchen", "überprüfen", "bewerten", "finanziell"
+        ],
+        "summarizer": [
+            # English
+            "summarize", "summary", "brief", "overview", "condensed", "digest",
+            # Arabic
+            "ملخص", "تلخيص", "موجز", "نظرة عامة",
+            # Spanish
+            "resumir", "resumen", "resumen ejecutivo", "sinopsis",
+            # French
+            "résumer", "résumé", "synthèse", "aperçu",
+            # German
+            "zusammenfassen", "zusammenfassung", "übersicht"
+        ],
+        "mathematical": [
+            # English
+            "calculate", "compute", "solve", "math", "equation", "formula", "+", "-", "*", "/", "=", "sqrt",
+            # Arabic
+            "حساب", "احسب", "رياضيات", "معادلة", "حل",
+            # Spanish
+            "calcular", "computar", "resolver", "matemáticas", "ecuación",
+            # French
+            "calculer", "résoudre", "mathématiques", "équation",
+            # German
+            "berechnen", "rechnen", "lösen", "mathematik", "gleichung"
+        ],
+        "historian": [
+            # English
+            "history", "historical", "past", "ancient", "medieval", "renaissance", "war", "empire", "civilization",
+            # Arabic
+            "تاريخ", "تاريخي", "الماضي", "قديم", "حرب", "إمبراطورية", "حضارة",
+            # Spanish
+            "historia", "histórico", "pasado", "antiguo", "guerra", "imperio", "civilización",
+            # French
+            "histoire", "historique", "passé", "ancien", "guerre", "empire", "civilisation",
+            # German
+            "geschichte", "historisch", "vergangenheit", "antik", "krieg", "reich", "zivilisation"
+        ],
+        "sports": [
+            # English
+            "sports", "athlete", "team", "game", "match", "score", "championship", "league", "player", "football", "basketball", "soccer",
+            # Arabic
+            "رياضة", "رياضي", "فريق", "لعبة", "مباراة", "نتيجة", "بطولة", "دوري", "لاعب", "كرة القدم", "كرة السلة",
+            # Spanish
+            "deportes", "atleta", "equipo", "juego", "partido", "puntuación", "campeonato", "liga", "jugador", "fútbol", "baloncesto",
+            # French
+            "sports", "athlète", "équipe", "jeu", "match", "score", "championnat", "ligue", "joueur", "football", "basketball",
+            # German
+            "sport", "athlet", "mannschaft", "spiel", "match", "punktzahl", "meisterschaft", "liga", "spieler", "fußball", "basketball"
+        ]
     }
     
     # Check for each agent type (except the primary one)
     for agent_type, keywords in agent_keywords.items():
         if agent_type != primary_agent_type:
-            if any(keyword in text for keyword in keywords):
-                print(f"   🎯 Found keywords for {agent_type}: {[kw for kw in keywords if kw in text]}")
+            # Check both original text and lowercase for multilingual support
+            matched_keywords = []
+            for keyword in keywords:
+                if keyword.lower() in text or keyword in message:  # Check both cases for non-English text
+                    matched_keywords.append(keyword)
+            
+            if matched_keywords:
+                print(f"   🎯 Found keywords for {agent_type}: {matched_keywords}")
                 additional_agents.append(agent_type)
     
     # Use LLM for more sophisticated context analysis if needed
